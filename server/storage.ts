@@ -95,8 +95,9 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     const board: Board = {
-      ...insertBoard,
       id,
+      name: insertBoard.name,
+      thumbnail: insertBoard.thumbnail ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -156,7 +157,14 @@ export class MemStorage implements IStorage {
 
   async createLayer(insertLayer: InsertLayer): Promise<Layer> {
     const id = randomUUID();
-    const layer: Layer = { ...insertLayer, id };
+    const layer: Layer = {
+      id,
+      boardId: insertLayer.boardId,
+      name: insertLayer.name,
+      visible: insertLayer.visible ?? true,
+      opacity: insertLayer.opacity ?? 100,
+      order: insertLayer.order ?? 0,
+    };
     this.layers.set(id, layer);
     return layer;
   }
@@ -224,7 +232,16 @@ export class MemStorage implements IStorage {
 
   async createNote(insertNote: InsertStickyNote): Promise<StickyNote> {
     const id = randomUUID();
-    const note: StickyNote = { ...insertNote, id };
+    const note: StickyNote = {
+      id,
+      boardId: insertNote.boardId,
+      content: insertNote.content ?? '',
+      color: insertNote.color,
+      x: insertNote.x,
+      y: insertNote.y,
+      width: insertNote.width ?? 192,
+      height: insertNote.height ?? 192,
+    };
     this.stickyNotes.set(id, note);
     return note;
   }
