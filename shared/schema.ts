@@ -21,6 +21,8 @@ export const boards = pgTable("boards", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   thumbnail: text("thumbnail"),
+  width: integer("width").notNull().default(1920),
+  height: integer("height").notNull().default(1080),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

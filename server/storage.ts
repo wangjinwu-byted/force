@@ -98,6 +98,8 @@ export class MemStorage implements IStorage {
       id,
       name: insertBoard.name,
       thumbnail: insertBoard.thumbnail ?? null,
+      width: insertBoard.width ?? 1920,
+      height: insertBoard.height ?? 1080,
       createdAt: now,
       updatedAt: now,
     };

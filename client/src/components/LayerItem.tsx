@@ -7,6 +7,8 @@ interface LayerItemProps {
   name: string;
   visible: boolean;
   opacity: number;
+  active?: boolean;
+  onSelect?: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   onOpacityChange: (id: string, opacity: number) => void;
   onDelete: (id: string) => void;
@@ -17,12 +19,18 @@ export default function LayerItem({
   name,
   visible,
   opacity,
+  active = false,
+  onSelect,
   onToggleVisibility,
   onOpacityChange,
   onDelete,
 }: LayerItemProps) {
   return (
-    <div className="group p-3 rounded-md border bg-card hover-elevate" data-testid={`layer-item-${id}`}>
+    <div
+      className={`group p-3 rounded-md border cursor-pointer ${active ? 'bg-accent border-primary' : 'bg-card hover-elevate'}`}
+      onClick={() => onSelect?.(id)}
+      data-testid={`layer-item-${id}`}
+    >
       <div className="flex items-center gap-2 mb-2">
         <GripVertical className="w-4 h-4 text-muted-foreground cursor-grab" />
         <div className="w-10 h-10 rounded border bg-muted flex-shrink-0" />

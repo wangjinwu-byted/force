@@ -25,7 +25,7 @@ import LayerItem from '@/components/LayerItem';
 import StickyNote from '@/components/StickyNote';
 import ColorPicker from '@/components/ColorPicker';
 import DrawingCanvas from '@/components/DrawingCanvas';
-import type { Board, Layer, StickyNote as Note } from '@shared/schema';
+import type { Board, Layer, StickyNote as Note, Stroke } from '@shared/schema';
 
 type Tool = 'select' | 'pen' | 'eraser' | 'shape' | 'text' | 'sticky' | 'laser';
 
@@ -37,6 +37,7 @@ export default function CanvasEditor() {
   const [color, setColor] = useState('#000000');
   const [strokeWidth, setStrokeWidth] = useState(3);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
 
   const boardId = params?.id || null;
   const { isConnected, activeUsers, send, on, off } = useWebSocket(boardId);
@@ -55,6 +56,39 @@ export default function CanvasEditor() {
     queryKey: ['/api/boards', boardId, 'notes'],
     enabled: !!boardId,
   });
+
+  const { data: strokes = [], refetch: refetchStrokes } = useQuery<Stroke[]>({
+    queryKey: ['/api/boards', boardId, 'strokes'],
+    enabled: !!boardId,
+  });
+
+  // Manage active layer: initialize, handle deletion, handle visibility
+  useEffect(() => {
+    if (layers.length === 0) {
+      setActiveLayerId(null);
+      return;
+    }
+
+    // Initialize if no active layer
+    if (!activeLayerId) {
+      const firstVisibleLayer = layers.find(l => l.visible);
+      setActiveLayerId(firstVisibleLayer?.id || null);
+      return;
+    }
+
+    // Check if active layer still exists and is visible
+    const activeLayer = layers.find(l => l.id === activeLayerId);
+    
+    if (!activeLayer) {
+      // Active layer was deleted, switch to first visible layer or null
+      const firstVisibleLayer = layers.find(l => l.visible);
+      setActiveLayerId(firstVisibleLayer?.id || null);
+    } else if (!activeLayer.visible) {
+      // Active layer is hidden, switch to another visible layer or null
+      const firstVisibleLayer = layers.find(l => l.visible && l.id !== activeLayerId);
+      setActiveLayerId(firstVisibleLayer?.id || null);
+    }
+  }, [layers, activeLayerId]);
 
   const createLayerMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -120,6 +154,10 @@ export default function CanvasEditor() {
       refetchNotes();
     };
 
+    const handleDrawStroke = (data: any) => {
+      refetchStrokes();
+    };
+
     const handleUserJoined = () => {
       toast({
         title: 'User joined',
@@ -138,16 +176,18 @@ export default function CanvasEditor() {
 
     on('layer_update', handleLayerUpdate);
     on('note_update', handleNoteUpdate);
+    on('draw_stroke', handleDrawStroke);
     on('user_joined', handleUserJoined);
     on('user_left', handleUserLeft);
 
     return () => {
       off('layer_update');
       off('note_update');
+      off('draw_stroke');
       off('user_joined');
       off('user_left');
     };
-  }, [isConnected, on, off, refetchLayers, refetchNotes, toast]);
+  }, [isConnected, on, off, refetchLayers, refetchNotes, refetchStrokes, toast]);
 
   const handleToolSelect = (tool: Tool) => {
     setActiveTool(tool);
@@ -161,11 +201,19 @@ export default function CanvasEditor() {
   const handleToggleLayerVisibility = (id: string) => {
     const layer = layers.find(l => l.id === id);
     if (layer) {
+      const newVisibility = !layer.visible;
+      
+      // If hiding the active layer, switch to another visible layer immediately
+      if (id === activeLayerId && !newVisibility) {
+        const nextVisibleLayer = layers.find(l => l.visible && l.id !== id);
+        setActiveLayerId(nextVisibleLayer?.id || null);
+      }
+      
       updateLayerMutation.mutate({
         id,
-        data: { visible: !layer.visible },
+        data: { visible: newVisibility },
       });
-      send('layer_update', { id, visible: !layer.visible });
+      send('layer_update', { id, visible: newVisibility });
     }
   };
 
@@ -186,6 +234,13 @@ export default function CanvasEditor() {
       });
       return;
     }
+    
+    // If deleting the active layer, switch to another visible layer immediately
+    if (id === activeLayerId) {
+      const nextVisibleLayer = layers.find(l => l.visible && l.id !== id);
+      setActiveLayerId(nextVisibleLayer?.id || null);
+    }
+    
     deleteLayerMutation.mutate(id);
   };
 
@@ -204,6 +259,23 @@ export default function CanvasEditor() {
   const handleDeleteNote = (id: string) => {
     deleteNoteMutation.mutate(id);
   };
+
+  const handleStrokeComplete = (stroke: any) => {
+    // Guard against strokes when no active layer
+    if (!activeLayerId || !canDraw) {
+      return;
+    }
+    
+    const strokeWithContext = {
+      ...stroke,
+      boardId,
+    };
+    send('draw_stroke', strokeWithContext);
+  };
+
+  // Determine if drawing is allowed
+  const activeLayer = layers.find(l => l.id === activeLayerId);
+  const canDraw = activeLayer && activeLayer.visible;
 
   if (!match) return null;
 
@@ -329,9 +401,18 @@ export default function CanvasEditor() {
           </div>
 
           <DrawingCanvas
-            tool={activeTool === 'pen' ? 'pen' : activeTool === 'eraser' ? 'eraser' : activeTool === 'laser' ? 'laser' : 'select'}
+            tool={canDraw ? (activeTool === 'pen' ? 'pen' : activeTool === 'eraser' ? 'eraser' : activeTool === 'laser' ? 'laser' : 'select') : 'select'}
             color={color}
             strokeWidth={strokeWidth}
+            layerId={activeLayerId || undefined}
+            boardId={boardId || undefined}
+            boardWidth={board?.width}
+            boardHeight={board?.height}
+            strokes={strokes.filter(s => {
+              const layer = layers.find(l => l.id === s.layerId);
+              return layer && layer.visible && s.layerId === activeLayerId;
+            })}
+            onStrokeComplete={handleStrokeComplete}
           />
 
           {notes.map((note) => (
@@ -359,6 +440,8 @@ export default function CanvasEditor() {
                   name={layer.name}
                   visible={layer.visible}
                   opacity={layer.opacity}
+                  active={layer.id === activeLayerId}
+                  onSelect={setActiveLayerId}
                   onToggleVisibility={handleToggleLayerVisibility}
                   onOpacityChange={handleLayerOpacityChange}
                   onDelete={handleDeleteLayer}
