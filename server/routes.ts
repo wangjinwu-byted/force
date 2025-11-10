@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { insertBoardSchema, insertLayerSchema, insertStickyNoteSchema, insertStrokeSchema } from "@shared/schema";
+import { generateBoardThumbnail } from "./lib/generateThumbnail";
 
 interface WSMessage {
   type: string;
@@ -53,7 +54,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/boards", async (req, res) => {
     try {
       const validatedData = insertBoardSchema.parse(req.body);
+      
+      // Generate AI thumbnail in the background
+      const thumbnailPromise = generateBoardThumbnail();
+      
+      // Create board first without waiting for thumbnail
       const board = await storage.createBoard(validatedData);
+      
+      // Update with thumbnail once generated
+      thumbnailPromise.then(async (thumbnail) => {
+        if (thumbnail) {
+          await storage.updateBoard(board.id, { thumbnail });
+        }
+      }).catch(err => {
+        console.error('Failed to update board with thumbnail:', err);
+      });
+      
       res.status(201).json(board);
     } catch (error) {
       res.status(400).json({ error: "Invalid board data" });
