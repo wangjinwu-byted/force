@@ -1,14 +1,38 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { insertBoardSchema, insertLayerSchema, insertStickyNoteSchema, insertStrokeSchema } from "@shared/schema";
+
+interface WSMessage {
+  type: string;
+  boardId?: string;
+  data?: any;
+  userId?: string;
+}
+
+interface UserConnection {
+  ws: WebSocket;
+  boardId: string | null;
+  userId: string;
+}
+
+const connections = new Map<WebSocket, UserConnection>();
+const boardUsers = new Map<string, Set<string>>();
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Board routes
   app.get("/api/boards", async (req, res) => {
     try {
       const boards = await storage.getAllBoards();
-      res.json(boards);
+      
+      // Add active user count to each board
+      const boardsWithUsers = boards.map(board => ({
+        ...board,
+        activeUsers: boardUsers.get(board.id)?.size || 0,
+      }));
+      
+      res.json(boardsWithUsers);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch boards" });
     }
@@ -178,6 +202,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
+
+  // WebSocket server for real-time collaboration
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  function broadcastToBoard(boardId: string, message: WSMessage, exclude?: WebSocket) {
+    connections.forEach((conn, ws) => {
+      if (conn.boardId === boardId && ws !== exclude && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(message));
+      }
+    });
+  }
+
+  wss.on('connection', (ws: WebSocket) => {
+    const userId = Math.random().toString(36).substring(7);
+    
+    connections.set(ws, {
+      ws,
+      boardId: null,
+      userId,
+    });
+
+    ws.on('message', async (data: Buffer) => {
+      try {
+        const message: WSMessage = JSON.parse(data.toString());
+        const conn = connections.get(ws);
+        if (!conn) return;
+
+        switch (message.type) {
+          case 'join_board':
+            if (message.boardId) {
+              // Leave previous board
+              if (conn.boardId) {
+                const prevUsers = boardUsers.get(conn.boardId);
+                if (prevUsers) {
+                  prevUsers.delete(conn.userId);
+                  broadcastToBoard(conn.boardId, {
+                    type: 'user_left',
+                    userId: conn.userId,
+                  });
+                }
+              }
+
+              // Join new board
+              conn.boardId = message.boardId;
+              if (!boardUsers.has(message.boardId)) {
+                boardUsers.set(message.boardId, new Set());
+              }
+              boardUsers.get(message.boardId)!.add(conn.userId);
+
+              // Notify others
+              broadcastToBoard(message.boardId, {
+                type: 'user_joined',
+                userId: conn.userId,
+              }, ws);
+
+              // Send current users to new joiner
+              const currentUsers = Array.from(boardUsers.get(message.boardId)!);
+              ws.send(JSON.stringify({
+                type: 'users_list',
+                data: currentUsers,
+              }));
+            }
+            break;
+
+          case 'draw_stroke':
+            if (conn.boardId && message.data) {
+              // Save stroke to storage
+              await storage.createStroke({
+                ...message.data,
+                boardId: conn.boardId,
+              });
+
+              // Broadcast to other users
+              broadcastToBoard(conn.boardId, {
+                type: 'draw_stroke',
+                data: message.data,
+                userId: conn.userId,
+              }, ws);
+            }
+            break;
+
+          case 'laser_pointer':
+            if (conn.boardId && message.data) {
+              broadcastToBoard(conn.boardId, {
+                type: 'laser_pointer',
+                data: message.data,
+                userId: conn.userId,
+              }, ws);
+            }
+            break;
+
+          case 'note_update':
+            if (conn.boardId && message.data) {
+              if (message.data.id) {
+                await storage.updateNote(message.data.id, message.data);
+              } else {
+                await storage.createNote({
+                  ...message.data,
+                  boardId: conn.boardId,
+                });
+              }
+
+              broadcastToBoard(conn.boardId, {
+                type: 'note_update',
+                data: message.data,
+                userId: conn.userId,
+              }, ws);
+            }
+            break;
+
+          case 'layer_update':
+            if (conn.boardId && message.data) {
+              if (message.data.id) {
+                await storage.updateLayer(message.data.id, message.data);
+              }
+
+              broadcastToBoard(conn.boardId, {
+                type: 'layer_update',
+                data: message.data,
+                userId: conn.userId,
+              }, ws);
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('WebSocket message error:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      const conn = connections.get(ws);
+      if (conn && conn.boardId) {
+        const users = boardUsers.get(conn.boardId);
+        if (users) {
+          users.delete(conn.userId);
+          broadcastToBoard(conn.boardId, {
+            type: 'user_left',
+            userId: conn.userId,
+          });
+        }
+      }
+      connections.delete(ws);
+    });
+  });
 
   return httpServer;
 }
