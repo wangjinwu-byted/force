@@ -1,43 +1,52 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { queryClient, apiRequest } from '@/lib/queryClient';
 import BoardCard from '@/components/BoardCard';
 import CreateBoardCard from '@/components/CreateBoardCard';
 import CreateBoardDialog from '@/components/CreateBoardDialog';
 import { Button } from '@/components/ui/button';
 import { Palette } from 'lucide-react';
-
-import thumbnail1 from '@assets/generated_images/Blue_purple_abstract_strokes_a25d539a.png';
-import thumbnail2 from '@assets/generated_images/Orange_pink_watercolor_strokes_c5f8e792.png';
-import thumbnail3 from '@assets/generated_images/Teal_coral_geometric_art_62c4d858.png';
-import thumbnail4 from '@assets/generated_images/Green_gold_expressionist_strokes_5b70ce6d.png';
-
-// todo: remove mock functionality
-const mockBoards = [
-  { id: '1', name: 'Design Sprint 2024', thumbnail: thumbnail1, activeUsers: 3, lastModified: '2 hours ago' },
-  { id: '2', name: 'Marketing Campaign', thumbnail: thumbnail2, activeUsers: 1, lastModified: '1 day ago' },
-  { id: '3', name: 'Product Wireframes', thumbnail: thumbnail3, activeUsers: 5, lastModified: '3 hours ago' },
-  { id: '4', name: 'Team Brainstorm', thumbnail: thumbnail4, activeUsers: 2, lastModified: '5 days ago' },
-];
+import type { Board } from '@shared/schema';
 
 export default function BoardLobby() {
   const [, setLocation] = useLocation();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [boards, setBoards] = useState(mockBoards);
+
+  const { data: boards = [], isLoading } = useQuery<Board[]>({
+    queryKey: ['/api/boards'],
+  });
+
+  const createBoardMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest('POST', '/api/boards', { name });
+      return await res.json();
+    },
+    onSuccess: (board: Board) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/boards'] });
+      setLocation(`/board/${board.id}`);
+    },
+  });
 
   const handleCreateBoard = (name: string) => {
-    const newBoard = {
-      id: String(boards.length + 1),
-      name,
-      thumbnail: [thumbnail1, thumbnail2, thumbnail3, thumbnail4][boards.length % 4],
-      activeUsers: 1,
-      lastModified: 'Just now',
-    };
-    setBoards([newBoard, ...boards]);
-    setLocation(`/board/${newBoard.id}`);
+    createBoardMutation.mutate(name);
   };
 
   const handleOpenBoard = (id: string) => {
     setLocation(`/board/${id}`);
+  };
+
+  const getRelativeTime = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - new Date(date).getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+    if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    return `${days} day${days > 1 ? 's' : ''} ago`;
   };
 
   return (
@@ -64,16 +73,28 @@ export default function BoardLobby() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          <CreateBoardCard onCreate={() => setShowCreateDialog(true)} />
-          {boards.map((board) => (
-            <BoardCard
-              key={board.id}
-              {...board}
-              onOpen={handleOpenBoard}
-            />
-          ))}
-        </div>
+        {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="aspect-video bg-muted animate-pulse rounded-lg" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <CreateBoardCard onCreate={() => setShowCreateDialog(true)} />
+            {boards.map((board) => (
+              <BoardCard
+                key={board.id}
+                id={board.id}
+                name={board.name}
+                thumbnail={board.thumbnail || '/placeholder-board.png'}
+                activeUsers={(board as any).activeUsers || 0}
+                lastModified={getRelativeTime(board.updatedAt)}
+                onOpen={handleOpenBoard}
+              />
+            ))}
+          </div>
+        )}
       </main>
 
       <CreateBoardDialog
