@@ -1,5 +1,5 @@
 import type { Config } from "tailwindcss";
-
+/* test code diff */
 export default {
   darkMode: ["class"],
   content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}"],
